@@ -120,6 +120,7 @@ namespace ClipShelf
         }
     }
 
+    // ------------------------------------------------------------------ 读取和保存设置
     class Settings
     {
         readonly string file;
@@ -1529,7 +1530,7 @@ namespace ClipShelf
     // ------------------------------------------------------------------ 放大查看（双击打开）
     class ImageView : Control
     {
-        readonly Bitmap img;
+        Bitmap img;
         readonly Metrics m;
         readonly Font hintFont;
         List<OcrLineBox> boxes = new List<OcrLineBox>();
@@ -1551,6 +1552,15 @@ namespace ClipShelf
 
         public List<OcrLineBox> Boxes { set { boxes = value ?? new List<OcrLineBox>(); hover = -1; Invalidate(); } }
         public bool ShowBoxes { set { showBoxes = value; hover = -1; Invalidate(); } }
+
+        public void SetImage(Bitmap image)
+        {
+            img = image;
+            boxes = new List<OcrLineBox>();
+            hover = -1; panning = false; moved = false; fit = true;
+            Cursor = Cursors.Default;
+            Invalidate();
+        }
 
         void Fit()
         {
@@ -1651,19 +1661,27 @@ namespace ClipShelf
         }
     }
 
+    // ------------------------------------------------------------------ 双击图片后的放大查看窗口
     class ViewerForm : Form
     {
-        readonly ShotItem item;
-        readonly Bitmap bmp;
+        ShotItem item;
+        Bitmap bmp;
         readonly ImageView view;
         readonly TextBox text;
         readonly Label status;
         readonly Action<ShotItem> copyImage;
+        readonly Func<ShotItem, int, bool> canNavigate;
+        readonly Action<ViewerForm, int> navigate;
+        readonly Button previousButton, nextButton;
+        readonly int normalStatusHeight;
+        int ocrGeneration;
         public bool OcrDone;   // 调试截图用
 
-        public ViewerForm(ShotItem item, Metrics m, Action<ShotItem> copyImage)
+        public ViewerForm(ShotItem item, Metrics m, Action<ShotItem> copyImage,
+            Func<ShotItem, int, bool> canNavigate = null, Action<ViewerForm, int> navigate = null)
         {
             this.item = item; this.copyImage = copyImage;
+            this.canNavigate = canNavigate; this.navigate = navigate;
             Text = "截图盒 · " + item.Time.ToString("MM-dd HH:mm:ss") + " · " + item.W + "×" + item.H;
             try { Icon = new Icon(new MemoryStream(AppIcon.BuildIco()), SystemInformation.IconSize); } catch { }
             BackColor = Theme.Body; ForeColor = Theme.Text;
@@ -1687,8 +1705,15 @@ namespace ClipShelf
             Label title = new Label();
             title.Text = "识别出的文字"; title.Dock = DockStyle.Top; title.Height = m.Px(30);
             title.Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold); title.ForeColor = Theme.Text;
+            FlowLayoutPanel navigation = new FlowLayoutPanel();
+            navigation.Dock = DockStyle.Top; navigation.Height = m.Px(38);
+            previousButton = MakeButton("← 上一张", false, m, delegate { if (navigate != null) navigate(this, -1); });
+            nextButton = MakeButton("下一张 →", false, m, delegate { if (navigate != null) navigate(this, 1); });
+            navigation.Controls.Add(previousButton);
+            navigation.Controls.Add(nextButton);
             status = new Label();
             status.Dock = DockStyle.Top; status.Height = m.Px(50); status.ForeColor = Theme.Sub; status.Text = "正在识别文字……";
+            normalStatusHeight = status.Height;
             text = new TextBox();
             text.Multiline = true; text.ScrollBars = ScrollBars.Vertical; text.WordWrap = true; text.Dock = DockStyle.Fill;
             text.BackColor = Theme.Card; text.ForeColor = Theme.Text; text.BorderStyle = BorderStyle.None;
@@ -1709,6 +1734,7 @@ namespace ClipShelf
             side.Controls.Add(boxes);
             side.Controls.Add(buttons);
             side.Controls.Add(status);
+            side.Controls.Add(navigation);
             side.Controls.Add(title);
             Controls.Add(view);
             Controls.Add(side);
@@ -1723,6 +1749,33 @@ namespace ClipShelf
                 if (e.KeyCode == Keys.Escape) Close();
             };
             Shown += delegate { view.Focus(); RunOcr(); };
+            Activated += delegate { RefreshNavigation(); };
+            RefreshNavigation();
+        }
+
+        public ShotItem Item { get { return item; } }
+
+        public void ShowItem(ShotItem next)
+        {
+            Bitmap newBitmap = Shots.LoadFile(next.Path);
+            Bitmap oldBitmap = bmp;
+            ocrGeneration++;
+            item = next; bmp = newBitmap;
+            view.SetImage(newBitmap);
+            oldBitmap.Dispose();
+            Text = "截图盒 · " + item.Time.ToString("MM-dd HH:mm:ss") + " · " + item.W + "×" + item.H;
+            settingText = true; text.Clear(); settingText = false;
+            userEdited = false; OcrDone = false;
+            status.Height = normalStatusHeight;
+            status.Text = "正在识别文字……";
+            RefreshNavigation();
+            RunOcr();
+        }
+
+        public void RefreshNavigation()
+        {
+            previousButton.Enabled = canNavigate != null && canNavigate(item, -1);
+            nextButton.Enabled = canNavigate != null && canNavigate(item, 1);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -1752,6 +1805,7 @@ namespace ClipShelf
 
         async void RunOcr()
         {
+            int generation = ocrGeneration;
             System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
@@ -1760,13 +1814,13 @@ namespace ClipShelf
                 // Progress 在界面线程上建，第一遍的结果会自动回到界面线程显示
                 Progress<OcrDoc> firstPass = new Progress<OcrDoc>(delegate(OcrDoc d1)
                 {
-                    if (IsDisposed || OcrDone) return;
+                    if (IsDisposed || generation != ocrGeneration || OcrDone) return;
                     ShowResult(d1);
                     partialShown = true;
                     status.Text = "已认出 " + d1.Lines.Count + " 行，正在放大再认一遍补漏……";
                 });
                 OcrDoc doc = await Task.Run(() => Ocr.RecognizeAsync(path, firstPass));   // 放到后台线程，大图也不卡界面
-                if (IsDisposed) return;
+                if (IsDisposed || generation != ocrGeneration) return;
                 if (doc.Error == "NOLANG")
                 {
                     status.Text = "这台电脑没装中文文字识别：设置 → 时间和语言 → 语言和区域 → 中文（简体）→ 语言选项 → 装上“光学字符识别”";
@@ -1783,10 +1837,10 @@ namespace ClipShelf
             }
             catch (Exception ex)
             {
-                if (!IsDisposed) status.Text = "识别失败：" + ex.Message;
+                if (!IsDisposed && generation == ocrGeneration) status.Text = "识别失败：" + ex.Message;
                 Log.W("文字识别失败: " + ex);
             }
-            finally { OcrDone = true; }
+            finally { if (generation == ocrGeneration) OcrDone = true; }
         }
 
         bool settingText, userEdited;
@@ -1802,6 +1856,7 @@ namespace ClipShelf
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            ocrGeneration++;
             base.OnFormClosed(e);
             bmp.Dispose();
         }
@@ -2223,6 +2278,8 @@ namespace ClipShelf
         {
             view.Relayout();
             UpdateSize();
+            foreach (ViewerForm viewer in viewers)
+                if (!viewer.IsDisposed) viewer.RefreshNavigation();
         }
 
         void Toast(string text, bool warn, int ms)
@@ -2474,13 +2531,16 @@ namespace ClipShelf
         }
 
         // ---------------- 放大查看（双击）
-        readonly Dictionary<string, ViewerForm> viewers = new Dictionary<string, ViewerForm>(StringComparer.OrdinalIgnoreCase);
+        readonly List<ViewerForm> viewers = new List<ViewerForm>();
 
         void OpenViewer(ShotItem it)
         {
             if (!File.Exists(it.Path)) { Toast("文件找不到了", true, 1600); return; }
-            ViewerForm v;
-            if (viewers.TryGetValue(it.Path, out v) && !v.IsDisposed)
+            ViewerForm v = viewers.Find(delegate(ViewerForm open)
+            {
+                return !open.IsDisposed && string.Equals(open.Item.Path, it.Path, StringComparison.OrdinalIgnoreCase);
+            });
+            if (v != null)
             {
                 if (v.WindowState == FormWindowState.Minimized) v.WindowState = FormWindowState.Normal;
                 v.Activate(); W32.SetForegroundWindow(v.Handle);
@@ -2488,16 +2548,36 @@ namespace ClipShelf
             }
             try
             {
-                v = new ViewerForm(it, m, CopyItem);
-                viewers[it.Path] = v;
-                string key = it.Path;
-                v.FormClosed += delegate { viewers.Remove(key); };
+                v = new ViewerForm(it, m, CopyItem, CanNavigateViewer, NavigateViewer);
+                viewers.Add(v);
+                v.FormClosed += delegate { viewers.Remove(v); };
                 if (autoCollapse) Collapse();
                 v.Show();
                 v.Activate();
                 W32.SetForegroundWindow(v.Handle);
             }
             catch (Exception ex) { Toast("打开失败", true, 1600); Log.W("打开查看窗口失败: " + ex.Message); }
+        }
+
+        bool CanNavigateViewer(ShotItem it, int step)
+        {
+            int currentIndex = items.IndexOf(it);
+            int index = currentIndex + step;
+            return currentIndex >= 0 && index >= 0 && index < items.Count && File.Exists(items[index].Path);
+        }
+
+        void NavigateViewer(ViewerForm current, int step)
+        {
+            ShotItem it = current.Item;
+            int currentIndex = items.IndexOf(it);
+            int index = currentIndex + step;
+            if (currentIndex < 0 || index < 0 || index >= items.Count || !File.Exists(items[index].Path))
+            {
+                current.RefreshNavigation(); return;
+            }
+            ShotItem target = items[index];
+            try { current.ShowItem(target); }
+            catch (Exception ex) { Toast("切换图片失败", true, 1600); Log.W("切换查看图片失败: " + ex.Message); }
         }
 
         // ---------------- 复制 / 拖出
@@ -2715,7 +2795,7 @@ namespace ClipShelf
         }
     }
 
-    // ------------------------------------------------------------------ 入口
+    // ------------------------------------------------------------------ 程序入口，决定启动时做什么
     static class Program
     {
         [STAThread]
