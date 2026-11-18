@@ -1824,8 +1824,8 @@ namespace ClipShelf
             title.Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold); title.ForeColor = Theme.Text;
             FlowLayoutPanel navigation = new FlowLayoutPanel();
             navigation.Dock = DockStyle.Top; navigation.Height = m.Px(38);
-            previousButton = MakeButton("← 上一张", false, m, delegate { if (navigate != null) navigate(this, -1); });
-            nextButton = MakeButton("下一张 →", false, m, delegate { if (navigate != null) navigate(this, 1); });
+            previousButton = MakeButton("← 上一张", false, m, delegate { if (navigate != null) navigate(this, 1); });
+            nextButton = MakeButton("下一张 →", false, m, delegate { if (navigate != null) navigate(this, -1); });
             navigation.Controls.Add(previousButton);
             navigation.Controls.Add(nextButton);
             status = new Label();
@@ -1854,8 +1854,8 @@ namespace ClipShelf
             FlowLayoutPanel buttons = new FlowLayoutPanel();
             buttons.Dock = DockStyle.Bottom; buttons.Height = m.Px(92); buttons.Padding = new Padding(0, m.Px(8), 0, 0);
             buttons.Controls.Add(MakeButton("复制全部文字", true, m, delegate { CopyAllText(); }));
-            buttons.Controls.Add(MakeButton("复制图片", false, m, delegate { copyImage(item); status.Text = "图片已复制，可以 Ctrl+V"; }));
-            buttons.Controls.Add(MakeButton("在文件夹中显示", false, m, delegate { try { Process.Start("explorer.exe", "/select,\"" + item.Path + "\""); } catch { } }));
+            buttons.Controls.Add(MakeButton("复制图片", false, m, delegate { copyImage(this.item); status.Text = "图片已复制，可以 Ctrl+V"; }));
+            buttons.Controls.Add(MakeButton("在文件夹中显示", false, m, delegate { try { Process.Start("explorer.exe", "/select,\"" + this.item.Path + "\""); } catch { } }));
             side.Controls.Add(textWrap);
             side.Controls.Add(boxes);
             side.Controls.Add(buttons);
@@ -1958,8 +1958,8 @@ namespace ClipShelf
 
         public void RefreshNavigation()
         {
-            previousButton.Enabled = canNavigate != null && canNavigate(item, -1);
-            nextButton.Enabled = canNavigate != null && canNavigate(item, 1);
+            previousButton.Enabled = canNavigate != null && canNavigate(item, 1);
+            nextButton.Enabled = canNavigate != null && canNavigate(item, -1);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -2516,8 +2516,7 @@ namespace ClipShelf
         {
             view.Relayout();
             UpdateSize();
-            foreach (ViewerForm viewer in viewers)
-                if (!viewer.IsDisposed) viewer.RefreshNavigation();
+            if (viewer != null && !viewer.IsDisposed) viewer.RefreshNavigation();
         }
 
         void Toast(string text, bool warn, int ms)
@@ -2769,26 +2768,27 @@ namespace ClipShelf
         }
 
         // ---------------- 放大查看（双击）
-        readonly List<ViewerForm> viewers = new List<ViewerForm>();
+        ViewerForm viewer;
 
         void OpenViewer(ShotItem it)
         {
             if (!File.Exists(it.Path)) { Toast("文件找不到了", true, 1600); return; }
-            ViewerForm v = viewers.Find(delegate(ViewerForm open)
+            if (viewer != null && !viewer.IsDisposed)
             {
-                return !open.IsDisposed && string.Equals(open.Item.Path, it.Path, StringComparison.OrdinalIgnoreCase);
-            });
-            if (v != null)
-            {
-                if (v.WindowState == FormWindowState.Minimized) v.WindowState = FormWindowState.Normal;
-                v.Activate(); W32.SetForegroundWindow(v.Handle);
+                try
+                {
+                    if (!string.Equals(viewer.Item.Path, it.Path, StringComparison.OrdinalIgnoreCase)) viewer.ShowItem(it);
+                    if (viewer.WindowState == FormWindowState.Minimized) viewer.WindowState = FormWindowState.Normal;
+                    viewer.Activate(); W32.SetForegroundWindow(viewer.Handle);
+                }
+                catch (Exception ex) { Toast("打开失败", true, 1600); Log.W("切换查看图片失败: " + ex.Message); }
                 return;
             }
             try
             {
-                v = new ViewerForm(it, m, CopyItem, CanNavigateViewer, NavigateViewer, cfg);
-                viewers.Add(v);
-                v.FormClosed += delegate { viewers.Remove(v); };
+                ViewerForm v = new ViewerForm(it, m, CopyItem, CanNavigateViewer, NavigateViewer, cfg);
+                viewer = v;
+                v.FormClosed += delegate { if (viewer == v) viewer = null; };
                 if (autoCollapse) Collapse();
                 v.Show();
                 v.Activate();
