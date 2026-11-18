@@ -15,12 +15,14 @@ using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using System.Web.Script.Serialization;
 using Microsoft.Win32;
 
 [assembly: AssemblyTitle("截图盒")]
@@ -148,6 +150,14 @@ namespace ClipShelf
         void Put(string k, string v) { if (!map.ContainsKey(k)) order.Add(k); map[k] = v; }
         public bool Has(string k) { return map.ContainsKey(k); }
         public string Get(string k, string def) { string v; return map.TryGetValue(k, out v) ? v : def; }
+        public string GetCredential(string k)
+        {
+            string value = Get(k, "").Trim();
+            if (value.Length >= 2 && ((value[0] == '"' && value[value.Length - 1] == '"')
+                || (value[0] == '\'' && value[value.Length - 1] == '\'')))
+                value = value.Substring(1, value.Length - 2);
+            return value;
+        }
         public int GetInt(string k, int def) { int v; return int.TryParse(Get(k, ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out v) ? v : def; }
         public bool GetBool(string k, bool def)
         {
@@ -171,10 +181,94 @@ namespace ClipShelf
                 sb.AppendLine("# StayOpenSeconds = 自动展开后保持多少秒（每来一张重新计时）");
                 sb.AppendLine("# StayOpenMinShots = 一段时间内收到几张才自动展开（默认 2：只截一张不打扰）");
                 sb.AppendLine("# MultiShotWindowSeconds = 上面这“一段时间”有多长（秒）");
+                sb.AppendLine("# BAIDU_APP_ID / BAIDU_APP_KEY = 百度通用文本翻译凭据，仅在点击翻译时使用；不要提交此文件");
                 foreach (string k in order) sb.AppendLine(k + "=" + map[k]);
                 File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
             }
             catch (Exception ex) { Log.W("写设置失败: " + ex.Message); }
+        }
+    }
+
+    // 百度通用文本翻译：只在用户点击翻译时发送识别出的文字，不发送图片。
+    static class BaiduTranslation
+    {
+        const int MaxCharsPerRequest = 900; // 标准版单次上限 1000 字符，留出余量
+        static readonly object RequestLock = new object();
+        static DateTime nextRequestUtc = DateTime.MinValue;
+
+        public static string Translate(string text, string target, string appId, string appKey, Func<bool> isCurrent)
+        {
+            List<string> results = new List<string>();
+            for (int start = 0; start < text.Length;)
+            {
+                if (!isCurrent()) throw new OperationCanceledException();
+                int length = Math.Min(MaxCharsPerRequest, text.Length - start);
+                if (start + length < text.Length && char.IsHighSurrogate(text[start + length - 1])) length--;
+                string part = text.Substring(start, length);
+                start += length;
+                lock (RequestLock)
+                {
+                    int wait = (int)(nextRequestUtc - DateTime.UtcNow).TotalMilliseconds;
+                    if (wait > 0) Thread.Sleep(wait);
+                    if (!isCurrent()) throw new OperationCanceledException();
+                    nextRequestUtc = DateTime.UtcNow.AddMilliseconds(1100); // 兼容标准版 1 QPS
+                    results.Add(TranslatePart(part, target, appId, appKey));
+                }
+            }
+            return string.Join(Environment.NewLine, results.ToArray());
+        }
+
+        static string TranslatePart(string text, string target, string appId, string appKey)
+        {
+            string salt = Guid.NewGuid().ToString("N");
+            string sign;
+            using (MD5 md5 = MD5.Create())
+            {
+                byte[] digest = md5.ComputeHash(Encoding.UTF8.GetBytes(appId + text + salt + appKey));
+                sign = BitConverter.ToString(digest).Replace("-", "").ToLowerInvariant();
+            }
+            string body = "q=" + Uri.EscapeDataString(text) + "&from=auto&to=" + Uri.EscapeDataString(target)
+                + "&appid=" + Uri.EscapeDataString(appId) + "&salt=" + salt + "&sign=" + sign;
+            byte[] data = Encoding.UTF8.GetBytes(body);
+            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; // TLS 1.2
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://api.fanyi.baidu.com/api/trans/vip/translate");
+            request.Method = "POST";
+            request.ContentType = "application/x-www-form-urlencoded; charset=utf-8";
+            request.ContentLength = data.Length;
+            request.Timeout = 15000;
+            request.ReadWriteTimeout = 15000;
+            using (Stream stream = request.GetRequestStream()) stream.Write(data, 0, data.Length);
+            string json;
+            using (WebResponse response = request.GetResponse())
+            using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+                json = reader.ReadToEnd();
+            return ParseResponse(json);
+        }
+
+        static string ParseResponse(string json)
+        {
+            Dictionary<string, object> result = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>;
+            if (result == null) throw new Exception("百度翻译返回了无效数据");
+            object error;
+            if (result.TryGetValue("error_code", out error))
+            {
+                if (Convert.ToString(error) == "52003")
+                    throw new Exception("百度翻译 52003：APPID 未获授权，请确认 APPID 正确且已开通通用文本翻译 API");
+                throw new Exception("百度翻译错误码：" + error);
+            }
+            object linesValue;
+            if (!result.TryGetValue("trans_result", out linesValue)) throw new Exception("百度翻译没有返回译文");
+            object[] lines = linesValue as object[];
+            if (lines == null || lines.Length == 0) throw new Exception("百度翻译没有返回译文");
+            List<string> translated = new List<string>();
+            foreach (object value in lines)
+            {
+                Dictionary<string, object> line = value as Dictionary<string, object>;
+                object dst;
+                if (line != null && line.TryGetValue("dst", out dst)) translated.Add(Convert.ToString(dst));
+            }
+            if (translated.Count == 0) throw new Exception("百度翻译没有返回译文");
+            return string.Join(Environment.NewLine, translated.ToArray());
         }
     }
 
@@ -1669,19 +1763,27 @@ namespace ClipShelf
         readonly ImageView view;
         readonly TextBox text;
         readonly Label status;
+        readonly TextBox translatedText;
+        readonly Label translationStatus;
+        readonly ComboBox targetLanguage;
+        readonly Button translateButton;
+        readonly Settings settings;
         readonly Action<ShotItem> copyImage;
         readonly Func<ShotItem, int, bool> canNavigate;
         readonly Action<ViewerForm, int> navigate;
         readonly Button previousButton, nextButton;
         readonly int normalStatusHeight;
         int ocrGeneration;
+        int translationGeneration;
+        static readonly string[] TargetCodes = { "zh", "en", "jp", "kor", "fra", "de", "spa", "ru" };
         public bool OcrDone;   // 调试截图用
 
         public ViewerForm(ShotItem item, Metrics m, Action<ShotItem> copyImage,
-            Func<ShotItem, int, bool> canNavigate = null, Action<ViewerForm, int> navigate = null)
+            Func<ShotItem, int, bool> canNavigate = null, Action<ViewerForm, int> navigate = null, Settings settings = null)
         {
             this.item = item; this.copyImage = copyImage;
             this.canNavigate = canNavigate; this.navigate = navigate;
+            this.settings = settings;
             Text = "截图盒 · " + item.Time.ToString("MM-dd HH:mm:ss") + " · " + item.W + "×" + item.H;
             try { Icon = new Icon(new MemoryStream(AppIcon.BuildIco()), SystemInformation.IconSize); } catch { }
             BackColor = Theme.Body; ForeColor = Theme.Text;
@@ -1690,10 +1792,10 @@ namespace ClipShelf
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;
             Rectangle wa = Screen.FromPoint(Cursor.Position).WorkingArea;
-            int w = Math.Min(wa.Width - 60, Math.Max(m.Px(900), (int)(wa.Width * 0.74)));
+            int w = Math.Min(wa.Width - 40, Math.Max(m.Px(1100), (int)(wa.Width * 0.88)));
             int h = Math.Min(wa.Height - 60, Math.Max(m.Px(560), (int)(wa.Height * 0.8)));
             Bounds = new Rectangle(wa.Left + (wa.Width - w) / 2, wa.Top + (wa.Height - h) / 2, w, h);
-            MinimumSize = new Size(m.Px(720), m.Px(420));
+            MinimumSize = new Size(Math.Min(m.Px(960), Math.Max(m.Px(720), wa.Width - 40)), m.Px(420));
 
             bmp = Shots.LoadFile(item.Path);
             view = new ImageView(bmp, m);
@@ -1718,7 +1820,15 @@ namespace ClipShelf
             text.Multiline = true; text.ScrollBars = ScrollBars.Vertical; text.WordWrap = true; text.Dock = DockStyle.Fill;
             text.BackColor = Theme.Card; text.ForeColor = Theme.Text; text.BorderStyle = BorderStyle.None;
             text.Font = new Font("Microsoft YaHei UI", 10.5f);
-            text.TextChanged += delegate { if (!settingText) userEdited = true; };
+            text.TextChanged += delegate
+            {
+                if (settingText) return;
+                userEdited = true;
+                translationGeneration++;
+                translatedText.Clear();
+                translationStatus.Text = "文字已修改，点击翻译以更新译文";
+                translateButton.Enabled = true;
+            };
             Panel textWrap = new Panel();
             textWrap.Dock = DockStyle.Fill; textWrap.BackColor = Theme.Card; textWrap.Padding = new Padding(m.Px(10));
             textWrap.Controls.Add(text);
@@ -1736,8 +1846,62 @@ namespace ClipShelf
             side.Controls.Add(status);
             side.Controls.Add(navigation);
             side.Controls.Add(title);
+
+            Panel translationSide = new Panel();
+            translationSide.Dock = DockStyle.Right; translationSide.Width = m.Px(330);
+            translationSide.BackColor = Theme.Header;
+            translationSide.Padding = new Padding(m.Px(14), m.Px(12), m.Px(14), m.Px(12));
+            Label translationTitle = new Label();
+            translationTitle.Text = "文字翻译"; translationTitle.Dock = DockStyle.Top; translationTitle.Height = m.Px(30);
+            translationTitle.Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold);
+            Label translationHint = new Label();
+            translationHint.Text = "在线翻译 · 点击后仅发送文字"; translationHint.Dock = DockStyle.Top;
+            translationHint.Height = m.Px(34); translationHint.ForeColor = Theme.Sub;
+            FlowLayoutPanel translationActions = new FlowLayoutPanel();
+            translationActions.Dock = DockStyle.Top; translationActions.Height = m.Px(38);
+            targetLanguage = new ComboBox();
+            targetLanguage.DropDownStyle = ComboBoxStyle.DropDownList; targetLanguage.Width = m.Px(120);
+            targetLanguage.BackColor = Theme.Card; targetLanguage.ForeColor = Theme.Text;
+            targetLanguage.Items.AddRange(new object[] { "中文", "English", "日本語", "한국어", "Français", "Deutsch", "Español", "Русский" });
+            targetLanguage.SelectedIndex = 0;
+            translateButton = MakeButton("翻译", true, m, delegate { TranslateCurrentText(); });
+            translationActions.Controls.Add(targetLanguage);
+            translationActions.Controls.Add(translateButton);
+            translationStatus = new Label();
+            translationStatus.Text = "选择目标语言后，点击翻译全部识别文字";
+            translationStatus.Dock = DockStyle.Top; translationStatus.Height = m.Px(50);
+            translationStatus.ForeColor = Theme.Sub;
+            translatedText = new TextBox();
+            translatedText.Multiline = true; translatedText.ReadOnly = true;
+            translatedText.ScrollBars = ScrollBars.Vertical; translatedText.WordWrap = true;
+            translatedText.Dock = DockStyle.Fill; translatedText.BackColor = Theme.Card;
+            translatedText.ForeColor = Theme.Text; translatedText.BorderStyle = BorderStyle.None;
+            translatedText.Font = new Font("Microsoft YaHei UI", 10.5f);
+            targetLanguage.SelectedIndexChanged += delegate
+            {
+                translationGeneration++;
+                translatedText.Clear();
+                translationStatus.Text = "目标语言已更改，点击翻译以更新译文";
+                translateButton.Enabled = true;
+            };
+            Panel translatedWrap = new Panel();
+            translatedWrap.Dock = DockStyle.Fill; translatedWrap.BackColor = Theme.Card;
+            translatedWrap.Padding = new Padding(m.Px(10)); translatedWrap.Controls.Add(translatedText);
+            Panel translationBottom = new Panel();
+            translationBottom.Dock = DockStyle.Bottom; translationBottom.Height = m.Px(126);
+            FlowLayoutPanel copyButtons = new FlowLayoutPanel();
+            copyButtons.Dock = DockStyle.Fill; copyButtons.Padding = new Padding(0, m.Px(8), 0, 0);
+            copyButtons.Controls.Add(MakeButton("复制译文", false, m, delegate { CopyTranslation(); }));
+            translationBottom.Controls.Add(copyButtons);
+            translationBottom.Controls.Add(translationHint);
+            translationSide.Controls.Add(translatedWrap);
+            translationSide.Controls.Add(translationBottom);
+            translationSide.Controls.Add(translationStatus);
+            translationSide.Controls.Add(translationActions);
+            translationSide.Controls.Add(translationTitle);
             Controls.Add(view);
             Controls.Add(side);
+            Controls.Add(translationSide);
 
             view.BoxClicked += delegate(OcrLineBox line)
             {
@@ -1760,11 +1924,15 @@ namespace ClipShelf
             Bitmap newBitmap = Shots.LoadFile(next.Path);
             Bitmap oldBitmap = bmp;
             ocrGeneration++;
+            translationGeneration++;
             item = next; bmp = newBitmap;
             view.SetImage(newBitmap);
             oldBitmap.Dispose();
             Text = "截图盒 · " + item.Time.ToString("MM-dd HH:mm:ss") + " · " + item.W + "×" + item.H;
             settingText = true; text.Clear(); settingText = false;
+            translatedText.Clear();
+            translationStatus.Text = "选择目标语言后，点击翻译全部识别文字";
+            translateButton.Enabled = true;
             userEdited = false; OcrDone = false;
             status.Height = normalStatusHeight;
             status.Text = "正在识别文字……";
@@ -1801,6 +1969,49 @@ namespace ClipShelf
             if (t.Trim().Length == 0) { status.Text = "没有可复制的文字"; return; }
             try { Clipboard.SetText(t); status.Text = text.SelectionLength > 0 ? "已复制选中的文字" : "全部文字已复制"; }
             catch (Exception ex) { status.Text = "复制失败：" + ex.Message; }
+        }
+
+        async void TranslateCurrentText()
+        {
+            string source = text.Text;
+            if (source.Trim().Length == 0) { translationStatus.Text = "没有可翻译的文字"; return; }
+            string appId = settings == null ? "" : settings.GetCredential("BAIDU_APP_ID");
+            string appKey = settings == null ? "" : settings.GetCredential("BAIDU_APP_KEY");
+            if (appId.Length == 0 || appKey.Length == 0)
+            {
+                translationStatus.Text = "请在 settings.ini 填写 BAIDU_APP_ID 和 BAIDU_APP_KEY，重启后再试";
+                return;
+            }
+            int generation = ++translationGeneration;
+            string target = TargetCodes[targetLanguage.SelectedIndex];
+            translateButton.Enabled = false;
+            translatedText.Clear();
+            translationStatus.Text = "正在翻译全部文字……";
+            try
+            {
+                string result = await Task.Run(() => BaiduTranslation.Translate(source, target, appId, appKey,
+                    delegate { return generation == Interlocked.CompareExchange(ref translationGeneration, 0, 0); }));
+                if (IsDisposed || generation != translationGeneration) return;
+                translatedText.Text = result;
+                translationStatus.Text = "翻译完成 · 源语言自动检测";
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed && generation == translationGeneration)
+                    translationStatus.Text = "翻译失败：" + ex.Message;
+            }
+            finally
+            {
+                if (!IsDisposed && generation == translationGeneration) translateButton.Enabled = true;
+            }
+        }
+
+        void CopyTranslation()
+        {
+            string value = translatedText.SelectionLength > 0 ? translatedText.SelectedText : translatedText.Text;
+            if (value.Length == 0) { translationStatus.Text = "没有可复制的译文"; return; }
+            try { Clipboard.SetText(value); translationStatus.Text = "译文已复制"; }
+            catch (Exception ex) { translationStatus.Text = "复制失败：" + ex.Message; }
         }
 
         async void RunOcr()
@@ -1857,6 +2068,7 @@ namespace ClipShelf
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             ocrGeneration++;
+            translationGeneration++;
             base.OnFormClosed(e);
             bmp.Dispose();
         }
@@ -1916,6 +2128,12 @@ namespace ClipShelf
         public ShelfForm(Settings cfg, string shotsDir, Metrics m, bool snapshotMode)
         {
             this.cfg = cfg; this.shotsDir = shotsDir; this.m = m; this.snapshotMode = snapshotMode;
+            if (!snapshotMode && (!cfg.Has("BAIDU_APP_ID") || !cfg.Has("BAIDU_APP_KEY")))
+            {
+                if (!cfg.Has("BAIDU_APP_ID")) cfg.Set("BAIDU_APP_ID", "");
+                if (!cfg.Has("BAIDU_APP_KEY")) cfg.Set("BAIDU_APP_KEY", "");
+                cfg.Save();
+            }
             Text = "截图盒";
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
@@ -2548,7 +2766,7 @@ namespace ClipShelf
             }
             try
             {
-                v = new ViewerForm(it, m, CopyItem, CanNavigateViewer, NavigateViewer);
+                v = new ViewerForm(it, m, CopyItem, CanNavigateViewer, NavigateViewer, cfg);
                 viewers.Add(v);
                 v.FormClosed += delegate { viewers.Remove(v); };
                 if (autoCollapse) Collapse();
