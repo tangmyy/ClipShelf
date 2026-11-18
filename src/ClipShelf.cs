@@ -169,7 +169,7 @@ namespace ClipShelf
         public void Set(string k, object v) { Put(k, Convert.ToString(v, CultureInfo.InvariantCulture)); }
         public void Set(string k, bool v) { Put(k, v ? "1" : "0"); }
 
-        public void Save()
+        public bool Save()
         {
             try
             {
@@ -184,8 +184,9 @@ namespace ClipShelf
                 sb.AppendLine("# BAIDU_APP_ID / BAIDU_APP_KEY = 百度通用文本翻译凭据，仅在点击翻译时使用；不要提交此文件");
                 foreach (string k in order) sb.AppendLine(k + "=" + map[k]);
                 File.WriteAllText(file, sb.ToString(), new UTF8Encoding(true));
+                return true;
             }
-            catch (Exception ex) { Log.W("写设置失败: " + ex.Message); }
+            catch (Exception ex) { Log.W("写设置失败: " + ex.Message); return false; }
         }
     }
 
@@ -2910,6 +2911,76 @@ namespace ClipShelf
         }
 
         // ---------------- 菜单
+        void ShowBaiduCredentialsDialog()
+        {
+            using (Form dialog = new Form())
+            {
+                dialog.Text = "百度翻译密钥";
+                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dialog.StartPosition = FormStartPosition.CenterScreen;
+                dialog.ShowInTaskbar = false;
+                dialog.MinimizeBox = false; dialog.MaximizeBox = false;
+                dialog.AutoScaleMode = AutoScaleMode.None;
+                dialog.ClientSize = new Size(m.Px(390), m.Px(220));
+                dialog.BackColor = Theme.Header; dialog.ForeColor = Theme.Text;
+                dialog.Font = new Font("Microsoft YaHei UI", 9.5f);
+
+                Label idLabel = new Label();
+                idLabel.Text = "BAIDU_APP_ID";
+                idLabel.SetBounds(m.Px(20), m.Px(18), m.Px(350), m.Px(24));
+                TextBox idBox = new TextBox();
+                idBox.Text = cfg.GetCredential("BAIDU_APP_ID");
+                idBox.SetBounds(m.Px(20), m.Px(43), m.Px(350), m.Px(27));
+
+                Label keyLabel = new Label();
+                keyLabel.Text = "BAIDU_APP_KEY";
+                keyLabel.SetBounds(m.Px(20), m.Px(78), m.Px(350), m.Px(24));
+                TextBox keyBox = new TextBox();
+                keyBox.UseSystemPasswordChar = true;
+                keyBox.Text = cfg.GetCredential("BAIDU_APP_KEY");
+                keyBox.SetBounds(m.Px(20), m.Px(103), m.Px(350), m.Px(27));
+
+                Label hint = new Label();
+                hint.Text = "密钥保存在本机 settings.ini；点击翻译时才联网。";
+                hint.ForeColor = Theme.Sub;
+                hint.SetBounds(m.Px(20), m.Px(139), m.Px(350), m.Px(25));
+
+                Button save = new Button();
+                save.Text = "保存"; save.BackColor = Theme.Accent; save.ForeColor = Color.White;
+                save.FlatStyle = FlatStyle.Flat; save.FlatAppearance.BorderSize = 0;
+                save.SetBounds(m.Px(196), m.Px(175), m.Px(82), m.Px(30));
+                save.Click += delegate
+                {
+                    string appId = idBox.Text.Trim(), appKey = keyBox.Text.Trim();
+                    if (appId.Length == 0 || appKey.Length == 0)
+                    {
+                        MessageBox.Show(dialog, "请填写 BAIDU_APP_ID 和 BAIDU_APP_KEY。", "无法保存", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        if (appId.Length == 0) idBox.Focus(); else keyBox.Focus();
+                        return;
+                    }
+                    cfg.Set("BAIDU_APP_ID", appId);
+                    cfg.Set("BAIDU_APP_KEY", appKey);
+                    if (!cfg.Save())
+                    {
+                        MessageBox.Show(dialog, "写入 settings.ini 失败，请检查文件是否可写。", "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+                    dialog.DialogResult = DialogResult.OK;
+                };
+                Button cancel = new Button();
+                cancel.Text = "取消"; cancel.BackColor = Theme.Pill; cancel.ForeColor = Color.White;
+                cancel.FlatStyle = FlatStyle.Flat; cancel.FlatAppearance.BorderSize = 0;
+                cancel.SetBounds(m.Px(288), m.Px(175), m.Px(82), m.Px(30));
+                cancel.DialogResult = DialogResult.Cancel;
+
+                dialog.Controls.Add(idLabel); dialog.Controls.Add(idBox);
+                dialog.Controls.Add(keyLabel); dialog.Controls.Add(keyBox);
+                dialog.Controls.Add(hint); dialog.Controls.Add(save); dialog.Controls.Add(cancel);
+                dialog.AcceptButton = save; dialog.CancelButton = cancel;
+                if (dialog.ShowDialog(this) == DialogResult.OK) Toast("百度翻译密钥已保存", false, 1800);
+            }
+        }
+
         void BuildMainMenu()
         {
             List<ToolStripItem> old = new List<ToolStripItem>();
@@ -2977,6 +3048,10 @@ namespace ClipShelf
             ToolStripMenuItem folder = new ToolStripMenuItem("打开截图文件夹");
             folder.Click += delegate { try { Process.Start("explorer.exe", "\"" + shotsDir + "\""); } catch { } };
             mainMenu.Items.Add(folder);
+
+            ToolStripMenuItem baidu = new ToolStripMenuItem("填写百度翻译密钥");
+            baidu.Click += delegate { ShowBaiduCredentialsDialog(); };
+            mainMenu.Items.Add(baidu);
 
             ToolStripMenuItem auto = new ToolStripMenuItem("开机自动启动");
             bool on = false;
