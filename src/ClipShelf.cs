@@ -196,6 +196,20 @@ namespace ClipShelf
         static readonly object RequestLock = new object();
         static DateTime nextRequestUtc = DateTime.MinValue;
 
+        // 百度接口的目标语言不能是 auto；在本机根据待译文字选一个具体目标语言。
+        public static string AutoTarget(string source)
+        {
+            int han = 0, latin = 0;
+            foreach (char ch in source)
+            {
+                if ((ch >= '\u3040' && ch <= '\u30ff') || (ch >= '\uac00' && ch <= '\ud7af'))
+                    return "zh"; // 日语假名、韩文按外语处理
+                if (ch >= '\u4e00' && ch <= '\u9fff') han++;
+                else if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) latin++;
+            }
+            return han > latin ? "en" : "zh";
+        }
+
         public static string Translate(string text, string target, string appId, string appKey, Func<bool> isCurrent)
         {
             List<string> results = new List<string>();
@@ -231,7 +245,7 @@ namespace ClipShelf
                 + "&appid=" + Uri.EscapeDataString(appId) + "&salt=" + salt + "&sign=" + sign;
             byte[] data = Encoding.UTF8.GetBytes(body);
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; // TLS 1.2
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://api.fanyi.baidu.com/api/trans/vip/translate");
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://fanyi-api.baidu.com/api/trans/vip/translate");
             request.Method = "POST";
             request.ContentType = "application/x-www-form-urlencoded; charset=utf-8";
             request.ContentLength = data.Length;
@@ -1775,7 +1789,7 @@ namespace ClipShelf
         readonly int normalStatusHeight;
         int ocrGeneration;
         int translationGeneration;
-        static readonly string[] TargetCodes = { "zh", "en", "jp", "kor", "fra", "de", "spa", "ru" };
+        static readonly string[] TargetCodes = { "", "zh", "en", "jp", "kor", "fra", "de", "spa", "ru" };
         public bool OcrDone;   // 调试截图用
 
         public ViewerForm(ShotItem item, Metrics m, Action<ShotItem> copyImage,
@@ -1818,6 +1832,7 @@ namespace ClipShelf
             normalStatusHeight = status.Height;
             text = new TextBox();
             text.Multiline = true; text.ScrollBars = ScrollBars.Vertical; text.WordWrap = true; text.Dock = DockStyle.Fill;
+            text.HideSelection = false;
             text.BackColor = Theme.Card; text.ForeColor = Theme.Text; text.BorderStyle = BorderStyle.None;
             text.Font = new Font("Microsoft YaHei UI", 10.5f);
             text.TextChanged += delegate
@@ -1862,13 +1877,13 @@ namespace ClipShelf
             targetLanguage = new ComboBox();
             targetLanguage.DropDownStyle = ComboBoxStyle.DropDownList; targetLanguage.Width = m.Px(120);
             targetLanguage.BackColor = Theme.Card; targetLanguage.ForeColor = Theme.Text;
-            targetLanguage.Items.AddRange(new object[] { "中文", "English", "日本語", "한국어", "Français", "Deutsch", "Español", "Русский" });
+            targetLanguage.Items.AddRange(new object[] { "自动（中英）", "中文", "English", "日本語", "한국어", "Français", "Deutsch", "Español", "Русский" });
             targetLanguage.SelectedIndex = 0;
             translateButton = MakeButton("翻译", true, m, delegate { TranslateCurrentText(); });
             translationActions.Controls.Add(targetLanguage);
             translationActions.Controls.Add(translateButton);
             translationStatus = new Label();
-            translationStatus.Text = "选择目标语言后，点击翻译全部识别文字";
+            translationStatus.Text = "自动：中文为主译英文，其它译中文；选中文字可只翻译该段";
             translationStatus.Dock = DockStyle.Top; translationStatus.Height = m.Px(50);
             translationStatus.ForeColor = Theme.Sub;
             translatedText = new TextBox();
@@ -1931,7 +1946,7 @@ namespace ClipShelf
             Text = "截图盒 · " + item.Time.ToString("MM-dd HH:mm:ss") + " · " + item.W + "×" + item.H;
             settingText = true; text.Clear(); settingText = false;
             translatedText.Clear();
-            translationStatus.Text = "选择目标语言后，点击翻译全部识别文字";
+            translationStatus.Text = "自动：中文为主译英文，其它译中文；选中文字可只翻译该段";
             translateButton.Enabled = true;
             userEdited = false; OcrDone = false;
             status.Height = normalStatusHeight;
@@ -1973,7 +1988,8 @@ namespace ClipShelf
 
         async void TranslateCurrentText()
         {
-            string source = text.Text;
+            bool selected = text.SelectionLength > 0;
+            string source = selected ? text.SelectedText : text.Text;
             if (source.Trim().Length == 0) { translationStatus.Text = "没有可翻译的文字"; return; }
             string appId = settings == null ? "" : settings.GetCredential("BAIDU_APP_ID");
             string appKey = settings == null ? "" : settings.GetCredential("BAIDU_APP_KEY");
@@ -1983,17 +1999,20 @@ namespace ClipShelf
                 return;
             }
             int generation = ++translationGeneration;
-            string target = TargetCodes[targetLanguage.SelectedIndex];
+            string target = targetLanguage.SelectedIndex == 0
+                ? BaiduTranslation.AutoTarget(source) : TargetCodes[targetLanguage.SelectedIndex];
+            string targetName = targetLanguage.SelectedIndex == 0
+                ? (target == "en" ? "英文" : "中文") : targetLanguage.Text;
             translateButton.Enabled = false;
             translatedText.Clear();
-            translationStatus.Text = "正在翻译全部文字……";
+            translationStatus.Text = "正在将" + (selected ? "选中文字" : "全部文字") + "翻译为" + targetName + "……";
             try
             {
                 string result = await Task.Run(() => BaiduTranslation.Translate(source, target, appId, appKey,
                     delegate { return generation == Interlocked.CompareExchange(ref translationGeneration, 0, 0); }));
                 if (IsDisposed || generation != translationGeneration) return;
                 translatedText.Text = result;
-                translationStatus.Text = "翻译完成 · 源语言自动检测";
+                translationStatus.Text = "翻译完成 · 目标语言：" + targetName;
             }
             catch (Exception ex)
             {
