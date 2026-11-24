@@ -11,3 +11,5 @@ probe*.txt
 
 # 安装包输出
 dist/
+rapidocr-env/
+.rapidocr-tmp/

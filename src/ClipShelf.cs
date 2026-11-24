@@ -1254,6 +1254,52 @@ namespace ClipShelf
     class OcrLineBox { public string Text; public RectangleF Box; }
     class OcrDoc { public List<OcrLineBox> Lines = new List<OcrLineBox>(); public string Text = ""; public string Error; public string Lang; public double Scale = 1; public int Added; }
 
+    static class RapidOcr
+    {
+        class Response { public List<Line> lines { get; set; } }
+        class Line { public string text { get; set; } public float[] box { get; set; } }
+
+        public static string PythonPath()
+        {
+            string configured = Environment.GetEnvironmentVariable("CLIPSHELF_RAPIDOCR_PYTHON");
+            if (!string.IsNullOrEmpty(configured) && File.Exists(configured)) return configured;
+            string local = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"rapidocr-env\Scripts\python.exe");
+            return File.Exists(local) ? local : null;
+        }
+
+        public static OcrDoc Recognize(string path)
+        {
+            string python = PythonPath();
+            string script = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"tools\rapidocr_bridge.py");
+            if (python == null || !File.Exists(script)) throw new FileNotFoundException("RapidOCR 环境或脚本不存在");
+            ProcessStartInfo info = new ProcessStartInfo(python);
+            info.Arguments = "\"" + script + "\" \"" + Path.GetFullPath(path) + "\"";
+            info.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.RedirectStandardOutput = true;
+            info.StandardOutputEncoding = Encoding.UTF8;
+            string json;
+            using (Process process = Process.Start(info))
+            {
+                json = process.StandardOutput.ReadToEnd();
+                if (!process.WaitForExit(60000)) { process.Kill(); throw new TimeoutException("RapidOCR 超时"); }
+                if (process.ExitCode != 0) throw new Exception("RapidOCR 进程退出码 " + process.ExitCode);
+            }
+            Response response = new JavaScriptSerializer().Deserialize<Response>(json);
+            OcrDoc doc = new OcrDoc(); doc.Lang = "RapidOCR";
+            if (response.lines != null) foreach (Line line in response.lines)
+            {
+                doc.Lines.Add(new OcrLineBox {
+                    Text = line.text,
+                    Box = new RectangleF(line.box[0], line.box[1], line.box[2], line.box[3])
+                });
+            }
+            doc.Text = Ocr.Layout(doc.Lines);
+            return doc;
+        }
+    }
+
     static class Ocr
     {
         // 自己把 WinRT 异步转成 Task（不用 System.Runtime.WindowsRuntime 的扩展方法，它要 SDK 里的合并 Windows.winmd）
@@ -1532,6 +1578,16 @@ namespace ClipShelf
 
         // first：第一遍（原图）认完就先报一次，界面可以先显示；放大那遍认完再返回最终结果
         public static async Task<OcrDoc> RecognizeAsync(string path, IProgress<OcrDoc> first)
+        {
+            if (RapidOcr.PythonPath() != null && File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"tools\rapidocr_bridge.py")))
+            {
+                try { return RapidOcr.Recognize(path); }
+                catch (Exception ex) { Log.W("RapidOCR 失败，改用 Windows OCR: " + ex.Message); }
+            }
+            return await RecognizeWindowsAsync(path, first);
+        }
+
+        static async Task<OcrDoc> RecognizeWindowsAsync(string path, IProgress<OcrDoc> first)
         {
             OcrDoc doc = new OcrDoc();
             string err;
@@ -2062,7 +2118,7 @@ namespace ClipShelf
                 bool kept = partialShown && userEdited;
                 if (!kept) ShowResult(doc); else view.Boxes = doc.Lines;
                 status.Text = doc.Lines.Count == 0 ? "没有认出文字"
-                    : "认出 " + doc.Lines.Count + " 行（" + (sw.ElapsedMilliseconds < 1000 ? sw.ElapsedMilliseconds + " 毫秒" : (sw.ElapsedMilliseconds / 1000.0).ToString("0.0") + " 秒") + "）"
+                    : doc.Lang + " · 认出 " + doc.Lines.Count + " 行（" + (sw.ElapsedMilliseconds < 1000 ? sw.ElapsedMilliseconds + " 毫秒" : (sw.ElapsedMilliseconds / 1000.0).ToString("0.0") + " 秒") + "）"
                       + (kept ? "· 你改过文字，没有覆盖" : "· 可以直接改、选中复制");
                 Log.W("文字识别 " + Path.GetFileName(item.Path) + "：" + doc.Lines.Count + " 行（另一次补了 " + doc.Added + " 行），" + sw.ElapsedMilliseconds + " ms，主结果放大 " + doc.Scale + " 倍，语言 " + doc.Lang);
             }
