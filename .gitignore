@@ -13,3 +13,4 @@ probe*.txt
 dist/
 rapidocr-env/
 .rapidocr-tmp/
+work/

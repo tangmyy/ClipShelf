@@ -7,6 +7,8 @@ import sys
 def main():
     from rapidocr import RapidOCR
 
+    sys.stdout.reconfigure(encoding="utf-8")
+
     # RapidOCR logs to stdout; reserve stdout for the response consumed by C#.
     with contextlib.redirect_stdout(sys.stderr):
         result = RapidOCR()(sys.argv[1])

@@ -3,17 +3,17 @@
 ; 按当前用户安装到 %LOCALAPPDATA%\Programs\ClipShelf，不需要管理员权限
 ; （截图盒把截图和设置存在 exe 旁边，所以必须装在用户自己能写的位置）
 
-#define AppVer "1.3.0"
+#define AppVer "1.4.5"
 
 [Setup]
 AppId={{B86E6B2C-8074-4FD3-8C6F-D3CC25076671}
 AppName=截图盒
 AppVersion={#AppVer}
 AppVerName=截图盒 {#AppVer}
-AppPublisher=zchahaha2
-AppPublisherURL=https://github.com/zchahaha2/ClipShelf
-AppSupportURL=https://github.com/zchahaha2/ClipShelf/issues
-AppUpdatesURL=https://github.com/zchahaha2/ClipShelf/releases
+AppPublisher=tangmyy
+AppPublisherURL=https://github.com/tangmyy/ClipShelf
+AppSupportURL=https://github.com/tangmyy/ClipShelf/issues
+AppUpdatesURL=https://github.com/tangmyy/ClipShelf/releases
 DefaultDirName={autopf}\ClipShelf
 DefaultGroupName=截图盒
 DisableProgramGroupPage=yes
@@ -42,8 +42,12 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Name: "autostart"; Description: "开机自动启动截图盒"; GroupDescription: "其他选项："
 
 [Files]
-Source: "..\ClipShelf.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\dist\package\ClipShelf.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\package\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\package\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\package\THIRD_PARTY.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\package\third-party-licenses\*"; DestDir: "{app}\third-party-licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\package\rapidocr-worker\*"; DestDir: "{app}\rapidocr-worker"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\截图盒"; Filename: "{app}\ClipShelf.exe"; Comment: "截图自动收进来，拖出去就能发"
@@ -62,6 +66,8 @@ Type: filesandordirs; Name: "{app}\shots"
 Type: files; Name: "{app}\settings.ini"
 Type: files; Name: "{app}\log.txt"
 Type: files; Name: "{app}\log.txt.old"
+Type: filesandordirs; Name: "{app}\rapidocr-worker"
+Type: filesandordirs; Name: "{app}\third-party-licenses"
 Type: dirifempty; Name: "{app}"
 
 [Code]

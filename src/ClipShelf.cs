@@ -27,8 +27,8 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("截图盒")]
 [assembly: AssemblyProduct("截图盒 ClipShelf")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyVersion("1.4.5.0")]
+[assembly: AssemblyFileVersion("1.4.5.0")]
 
 namespace ClipShelf
 {
@@ -1250,7 +1250,7 @@ namespace ClipShelf
         }
     }
 
-    // ------------------------------------------------------------------ 文字识别（Windows 自带 OCR，不联网）
+    // ------------------------------------------------------------------ 文字识别（优先本地 RapidOCR，失败时使用 Windows OCR）
     class OcrLineBox { public string Text; public RectangleF Box; }
     class OcrDoc { public List<OcrLineBox> Lines = new List<OcrLineBox>(); public string Text = ""; public string Error; public string Lang; public double Scale = 1; public int Added; }
 
@@ -1258,6 +1258,16 @@ namespace ClipShelf
     {
         class Response { public List<Line> lines { get; set; } }
         class Line { public string text { get; set; } public float[] box { get; set; } }
+
+        static string WorkerPath()
+        {
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"rapidocr-worker\rapidocr-worker.exe");
+        }
+
+        public static bool IsAvailable()
+        {
+            return File.Exists(WorkerPath()) || (PythonPath() != null && File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"tools\rapidocr_bridge.py")));
+        }
 
         public static string PythonPath()
         {
@@ -1269,11 +1279,13 @@ namespace ClipShelf
 
         public static OcrDoc Recognize(string path)
         {
-            string python = PythonPath();
+            string worker = WorkerPath();
+            bool packaged = File.Exists(worker);
+            string python = packaged ? worker : PythonPath();
             string script = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"tools\rapidocr_bridge.py");
-            if (python == null || !File.Exists(script)) throw new FileNotFoundException("RapidOCR 环境或脚本不存在");
+            if (python == null || (!packaged && !File.Exists(script))) throw new FileNotFoundException("RapidOCR 环境或脚本不存在");
             ProcessStartInfo info = new ProcessStartInfo(python);
-            info.Arguments = "\"" + script + "\" \"" + Path.GetFullPath(path) + "\"";
+            info.Arguments = (packaged ? "" : "\"" + script + "\" ") + "\"" + Path.GetFullPath(path) + "\"";
             info.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory;
             info.UseShellExecute = false;
             info.CreateNoWindow = true;
@@ -1579,7 +1591,7 @@ namespace ClipShelf
         // first：第一遍（原图）认完就先报一次，界面可以先显示；放大那遍认完再返回最终结果
         public static async Task<OcrDoc> RecognizeAsync(string path, IProgress<OcrDoc> first)
         {
-            if (RapidOcr.PythonPath() != null && File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"tools\rapidocr_bridge.py")))
+            if (RapidOcr.IsAvailable())
             {
                 try { return RapidOcr.Recognize(path); }
                 catch (Exception ex) { Log.W("RapidOCR 失败，改用 Windows OCR: " + ex.Message); }
@@ -3241,7 +3253,7 @@ namespace ClipShelf
                 });
                 th.IsBackground = true;
                 th.Start();
-                Log.W("启动 v1.3.0 dpi=" + Dpi() + " 目录=" + baseDir);
+                Log.W("启动 v1.4.5 dpi=" + Dpi() + " 目录=" + baseDir);
                 Application.Run(form);
                 Log.W("退出");
                 GC.KeepAlive(mutex);

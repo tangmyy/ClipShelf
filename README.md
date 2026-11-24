@@ -2,7 +2,7 @@
 
 截图自动收进屏幕边上的小盒子，需要时直接拖出去；打开大图还能识别文字并按需翻译。
 
-Windows 小工具，提供安装版和单个 exe 的免安装版。截图收集与文字识别在本机完成；配置自己的百度翻译密钥后，只有点击“翻译”才会联网发送文字，图片不会上传。
+Windows 小工具，提供安装版和免安装便携包。截图收集与文字识别在本机完成；配置自己的百度翻译密钥后，只有点击“翻译”才会联网发送文字，图片不会上传。
 
 ![截图盒演示](docs/demo.gif)
 
@@ -19,7 +19,7 @@ Windows 小工具，提供安装版和单个 exe 的免安装版。截图收集�
 - **平时只占一个小方块**：角落里一个图标加张数，点一下展开列表。菜单里也可以改成"鼠标划过就展开"。
 - **连收两张才自动展开**：只截一张时不打扰你，小块闪一下、数字加 1，直接 Ctrl+V 就行；2 分钟内收到第二张，才自动展开并保持 1 分钟（每来一张重新计时），标题栏下面那条蓝线就是剩下的时间。时间到了、鼠标也不在上面，就自己收起来。
 - **一次拖好几张**：点选几张（左上角会标出 1、2、3 的顺序），拖其中任意一张，选中的会一起拖出去。拖出去的是图片文件，和从资源管理器里拖文件一样，聊天软件、网页上传框、文件夹都能接。
-- **双击放大、认出图里的字**：双击一张图，打开一个大窗口看（滚轮缩放、拖动平移），右边自动列出图里的文字，可以直接改、选中复制，或者一键复制全部；点图上的蓝框，复制那一行。可选装 RapidOCR 本地模型试用，未安装或运行失败时使用 Windows 自带文字识别；两种方式都在本机运行。
+- **双击放大、认出图里的字**：双击一张图，打开一个大窗口看（滚轮缩放、拖动平移），右边自动列出图里的文字，可以直接改、选中复制，或者一键复制全部；点图上的蓝框，复制那一行。安装版和便携包自带 RapidOCR 本地模型，运行失败时改用 Windows 自带文字识别；两种方式都在本机运行。
 - **也能复制粘贴**：右键一张选"复制"，之后按 Ctrl+V；选了几张时，右键可以一起复制。
 - **截图时拍不到它**：盒子挡在要截的内容上面也没关系，截出来的图里没有它。
 - **全屏时自动隐藏**：全屏游戏、全屏视频、幻灯片放映时，它自动藏起来。还可以指定某个程序在前台时隐藏，默认已经包含雷电、MuMu 模拟器。
@@ -30,13 +30,13 @@ Windows 小工具，提供安装版和单个 exe 的免安装版。截图收集�
 
 ## 下载和使用
 
-**安装版（推荐）**：到 [Releases](../../releases) 下载 `ClipShelf-Setup-1.3.0.exe`，双击按提示安装。
+**安装版（推荐）**：到 [Releases](../../releases) 下载 `ClipShelf-Setup-1.4.5.exe`，双击按提示安装。
 
 - 装在当前用户的 `%LOCALAPPDATA%\Programs\ClipShelf`，不需要管理员权限。
 - 安装时可以选择创建桌面快捷方式、开机自动启动，默认都勾上。
 - 卸载：在"设置 → 应用"里找"截图盒 ClipShelf"。卸载会先关掉正在运行的截图盒，再删掉它保存的截图、设置和开机启动项。
 
-**免安装版**：下载 `ClipShelf-1.3.0-portable.zip`，解压到一个普通文件夹（比如 `D:\Tools\ClipShelf`），双击 `ClipShelf.exe`。不要放在 `C:\Program Files` 这类需要管理员权限的地方，因为截图和设置就存在 exe 旁边。想要桌面图标并开机自启，在这个文件夹里运行一次 `ClipShelf.exe --install`。
+**免安装版**：下载 `ClipShelf-1.4.5-portable.zip`，完整解压到一个普通文件夹（比如 `D:\Tools\ClipShelf`），双击 `ClipShelf.exe`。请保留旁边的 `rapidocr-worker` 文件夹，单独复制 exe 会回退到 Windows OCR。不要放在 `C:\Program Files` 这类需要管理员权限的地方，因为截图和设置就存在 exe 旁边。想要桌面图标并开机自启，在这个文件夹里运行一次 `ClipShelf.exe --install`。
 
 运行后屏幕右上角会出现一个小方块，之后截的图都会收进去。右键小方块是菜单，可以设置展开方式、开机自动启动、暂停收集、打开截图文件夹等。
 
@@ -70,17 +70,17 @@ exe 所在文件夹下的 `shots\`，文件名是 `shot_日期_时间_编号.png
 
 ## 自己编译
 
-**试用 RapidOCR**：先安装 Python 3.12，在仓库目录运行 `setup-rapidocr.cmd`，再启动 `ClipShelf.exe`。脚本会把 RapidOCR 3.10.0、ONNX Runtime 和模型装进仓库内的 `rapidocr-env`，不会提交到 Git。识别窗口会显示实际使用的引擎。此试用方案需要该环境和 `tools/rapidocr_bridge.py` 与 exe 放在同一目录结构中；单独复制 exe 或使用当前安装包时仍会使用 Windows OCR。RapidOCR 只在本机处理图片，不调用云端 OCR。
+**从源码制作发布包**：先安装 Python 3.12，运行 `setup-rapidocr.cmd` 安装打包依赖，再运行 `powershell -ExecutionPolicy Bypass -File .\build-release.ps1`。它会生成 `dist\ClipShelf-1.4.5-portable.zip` 和供安装包使用的 `dist\package`。发布包内已包含 RapidOCR、ONNX Runtime、模型和 Python 运行时，最终用户不需要安装 Python。识别窗口会显示实际使用的引擎；RapidOCR 只在本机处理图片。
 
 双击 `build.cmd`。它用的是 Windows 自带的 C# 编译器（`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`），不用装 Visual Studio。全部代码都在 `src\ClipShelf.cs` 这一个文件里。文字识别调用的是 Windows 自带的 `Windows.Media.Ocr`，编译时引用的是系统里现成的 `C:\Windows\System32\WinMetadata\*.winmd`，也不用另装 SDK。
 
-做安装包：先装 [Inno Setup 6](https://jrsoftware.org/isdl.php)，再运行 `build-installer.cmd`，安装包输出到 `dist\`。安装脚本是 `installer\ClipShelf.iss`，中文界面用的是 Inno Setup 官方仓库里的 `ChineseSimplified.isl`。
+做安装包：先装 [Inno Setup 6](https://jrsoftware.org/isdl.php)，再运行 `build-installer.cmd`，它会重新生成发布包并输出安装包到 `dist\`。安装脚本是 `installer\ClipShelf.iss`，中文界面用的是 Inno Setup 官方仓库里的 `ChineseSimplified.isl`。
 
 ## 已知情况
 
 - 开发和测试都在 Windows 11 上完成。Windows 10（2004 及以后）理论上可以用，但还没实际测过。
 - 多显示器且缩放比例不同时，盒子按主屏的缩放显示。
-- 文字识别用的是系统里装好的识别语言：中文版 Windows 自带中文识别；如果提示"没装中文文字识别"，到"设置 → 时间和语言 → 语言和区域 → 中文（简体）→ 语言选项"里装上"光学字符识别"。
+- RapidOCR 启动失败时会回退到 Windows 文字识别；如果此时提示"没装中文文字识别"，到"设置 → 时间和语言 → 语言和区域 → 中文（简体）→ 语言选项"里装上"光学字符识别"。
 - 识别准确度：中文正文基本不错；小字号的英文和代码会有错，常见的是 i / l / 1、0 / O 分不清。截图盒会按上下文改掉一部分（比如版本号、文件名、日期），认完的文字在右边可以直接改。
 
 ## 许可
