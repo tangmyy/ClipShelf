@@ -55,6 +55,18 @@ if (Test-Path -LiteralPath $pythonLicense) {
     Copy-Item -LiteralPath $pythonLicense -Destination (Join-Path $licenses 'Python-3.12-LICENSE.txt')
 }
 $zip = Join-Path $root 'dist\ClipShelf-1.4.5-portable.zip'
-if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
-Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
+$packed = $false
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+        if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+        Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -ErrorAction Stop
+        $packed = $true
+        break
+    }
+    catch {
+        if ($attempt -eq 5) { throw }
+        Start-Sleep -Seconds 2
+    }
+}
+if (-not $packed) { throw '便携包压缩失败。' }
 Write-Output "RELEASE OK: $zip"

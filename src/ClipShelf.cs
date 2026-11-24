@@ -1586,15 +1586,28 @@ namespace ClipShelf
             return Median(l.Select(q => (double)q.Box.Height).ToList());
         }
 
-        public static Task<OcrDoc> RecognizeAsync(string path) { return RecognizeAsync(path, null); }
+        public static Task<OcrDoc> RecognizeAsync(string path) { return RecognizeAsync(path, null, null); }
+
+        public static string EngineMode(Settings settings)
+        {
+            string mode = settings == null ? "auto" : settings.Get("OcrEngine", "auto").ToLowerInvariant();
+            return mode == "rapidocr" || mode == "windows" ? mode : "auto";
+        }
 
         // first：第一遍（原图）认完就先报一次，界面可以先显示；放大那遍认完再返回最终结果
-        public static async Task<OcrDoc> RecognizeAsync(string path, IProgress<OcrDoc> first)
+        public static async Task<OcrDoc> RecognizeAsync(string path, IProgress<OcrDoc> first, Settings settings)
         {
-            if (RapidOcr.IsAvailable())
+            string mode = EngineMode(settings);
+            if (mode == "rapidocr" && !RapidOcr.IsAvailable())
+                return new OcrDoc { Error = "未找到 RapidOCR 运行环境，请使用安装版或完整便携包" };
+            if (mode != "windows" && RapidOcr.IsAvailable())
             {
                 try { return RapidOcr.Recognize(path); }
-                catch (Exception ex) { Log.W("RapidOCR 失败，改用 Windows OCR: " + ex.Message); }
+                catch (Exception ex)
+                {
+                    if (mode == "rapidocr") return new OcrDoc { Error = "RapidOCR 运行失败：" + ex.Message };
+                    Log.W("RapidOCR 失败，改用 Windows OCR: " + ex.Message);
+                }
             }
             return await RecognizeWindowsAsync(path, first);
         }
@@ -1605,7 +1618,7 @@ namespace ClipShelf
             string err;
             WOcrEngine eng = Engine(out err);
             if (eng == null) { doc.Error = err ?? "NOLANG"; return doc; }
-            doc.Lang = eng.RecognizerLanguage.LanguageTag;
+            doc.Lang = "Windows OCR " + eng.RecognizerLanguage.LanguageTag;
             using (Bitmap src = Shots.LoadFile(path))
             {
                 List<OcrLineBox> best = await Pass(eng, src, 1.0);
@@ -2003,6 +2016,19 @@ namespace ClipShelf
 
         public ShotItem Item { get { return item; } }
 
+        public void RerunOcr()
+        {
+            ocrGeneration++;
+            translationGeneration++;
+            settingText = true; text.Clear(); settingText = false;
+            translatedText.Clear();
+            view.Boxes = new List<OcrLineBox>();
+            status.Height = normalStatusHeight;
+            status.Text = "正在识别文字……";
+            userEdited = false; OcrDone = false;
+            RunOcr();
+        }
+
         public void ShowItem(ShotItem next)
         {
             Bitmap newBitmap = Shots.LoadFile(next.Path);
@@ -2118,7 +2144,7 @@ namespace ClipShelf
                     partialShown = true;
                     status.Text = "已认出 " + d1.Lines.Count + " 行，正在放大再认一遍补漏……";
                 });
-                OcrDoc doc = await Task.Run(() => Ocr.RecognizeAsync(path, firstPass));   // 放到后台线程，大图也不卡界面
+                OcrDoc doc = await Task.Run(() => Ocr.RecognizeAsync(path, firstPass, settings));   // 放到后台线程，大图也不卡界面
                 if (IsDisposed || generation != ocrGeneration) return;
                 if (doc.Error == "NOLANG")
                 {
@@ -3120,6 +3146,26 @@ namespace ClipShelf
             ToolStripMenuItem baidu = new ToolStripMenuItem("填写百度翻译密钥");
             baidu.Click += delegate { ShowBaiduCredentialsDialog(); };
             mainMenu.Items.Add(baidu);
+
+            ToolStripMenuItem ocrEngine = new ToolStripMenuItem("文字识别引擎");
+            string selectedEngine = Ocr.EngineMode(cfg);
+            string[] engineCodes = { "auto", "rapidocr", "windows" };
+            string[] engineLabels = { "自动选择（优先 RapidOCR）", "RapidOCR", "Windows 文字识别" };
+            for (int i = 0; i < engineCodes.Length; i++)
+            {
+                string code = engineCodes[i];
+                ToolStripMenuItem choice = new ToolStripMenuItem(engineLabels[i]);
+                choice.Checked = selectedEngine == code;
+                choice.Click += delegate
+                {
+                    cfg.Set("OcrEngine", code);
+                    cfg.Save();
+                    if (viewer != null && !viewer.IsDisposed) viewer.RerunOcr();
+                    Toast("文字识别引擎已切换", false, 1800);
+                };
+                ocrEngine.DropDownItems.Add(choice);
+            }
+            mainMenu.Items.Add(ocrEngine);
 
             ToolStripMenuItem auto = new ToolStripMenuItem("开机自动启动");
             bool on = false;
